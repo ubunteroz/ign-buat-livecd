@@ -1,0 +1,279 @@
+#!/bin/bash
+
+VERSION="0.2"
+CREDIT="ubunteroz, IGN-dev"
+CONTAINER_UUID="16051605-1605-1605-1605-160516051605"
+HOSTNAME="ignbox"
+
+if [[ `whoami` != "root" ]]
+then
+	echo "Ups, skrip ini harus dieksekusi dengan modus root."
+	exit
+fi
+
+function s_log {
+	echo -e "\e[1m\e[33m$1\e[0m"
+}
+
+function e_log {
+	echo -e "\e[1m\e[31m$1\e[0m"
+}
+
+function s_chroot_root {
+	chroot $IGN_DIR $@
+}
+
+function s_chroot_cont {
+	chroot $TEMP_DIR/container $@
+}
+
+function s_mount_cont {
+	if [ ! -d "$TEMP_DIR/container" ]; then
+		mkdir $TEMP_DIR/container
+	fi
+	mount $TEMP_DIR/LiveOS/rootfs.img $TEMP_DIR/container
+}
+
+function s_umount_cont {
+	sync
+	umount $TEMP_DIR/container
+}
+
+function s_help {
+	echo "Penggunaan: ign-buat-livecd [opsi]"
+	echo "Buat LiveCD IGOS Nusantara"
+	echo ""
+	echo "Opsi:"
+	echo "  -c, --config <direktori>   Direktori konfigurasi LiveCD"
+	echo "                             (default: /usr/share/buat-livecd/)"
+	echo "  -f, --fast                 Gunakan metode kompresi GZip (lebih cepat)"
+	echo "                             (default: XZ, lebih lama namun ukuran LiveCD lebih kecil)"
+	echo "  -m, --modify               Masuk ke interactive shell untuk memodifikasi LiveOS"
+	echo "  -o, --output <direktori>   Direktori output"
+	echo "                             (default: $HOME)"
+	echo "  -r, --root <direktori>     Direktori root IGOS Nusantara"
+	echo "                             (default: /)"
+	echo "  -s, --size <ukuran>        Ukuran kontainer LiveOS (dalam satuan GiB)"
+	echo "                             (default: 3)"
+	echo "  -h, --help                 Tampilkan bantuan ini"
+	echo "  -v, --version              Tampilkan versi skrip ini"
+}
+
+CMDLINE=$(getopt -o c:fhmo:r:s:v --long config:,fast,help,modify,output:root:,size:,version -n "ign-buat-livecd" -- "$@")
+
+eval set -- "$CMDLINE"
+
+INTERACTIVE_SHELL="0"
+
+while true; do
+	case "$1" in
+		-c | --config )
+			if [ -d "$2" ]; then
+				ISO_CONF="$(readlink -f $2)"
+			else
+				e_log "Oops, direktori konfigurasi \'$2\' tidak ada :("
+				exit
+			fi
+			shift 2
+			;;
+		-f | --fast )
+			SQUASHFS_COMP="gzip"
+			shift
+			;;
+		-h | --help )
+			s_help
+			exit
+			;;
+		-m | --modify )
+			INTERACTIVE_SHELL="1"
+			shift
+			;;
+		-o | --output )
+			if [ -d "$2" ]; then
+				WORKING_DIR="$(readlink -f $2)"
+			else
+				e_log "Oops, direktori output \'$2\' tidak ada :("
+				exit
+			fi
+			shift 2
+			;;
+		-r | --root )
+			if [ -d "$2" ]; then
+				IGN_DIR="$(readlink -f $2)"
+			else
+				e_log "Oops, direktori IGN \'$2\' tidak ada :("
+				exit
+			fi
+			shift 2
+			;;
+		-s | --size )
+			CONTAINER_SIZE="$2"
+			shift 2
+			;;
+		-v | --version )
+			echo "Buat LiveCD IGOS Nusantara versi $VERSION"
+			echo "Dibuat oleh $CREDIT"
+			echo "Didistribusikan dengan lisensi MIT"
+			exit
+			;;
+		-- )
+			shift
+			break
+			;;
+		* )
+			break
+			;;
+	esac
+done
+
+if [[ "$ISO_CONF" == "" ]]; then
+	ISO_CONF="/usr/share/buat-livecd/"
+fi
+
+if [[ "$CONTAINER_SIZE" == "" || $CONTAINER_SIZE == "0" ]]; then
+	CONTAINER_SIZE="3"
+fi
+
+if [[ "$IGN_DIR" == "" ]]; then
+	IGN_DIR="/"
+fi
+
+if [[ "$WORKING_DIR" == "" ]]; then
+	WORKING_DIR="$HOME"
+fi
+
+if [[ "$SQUASHFS_COMP" == "" ]]; then
+	SQUASHFS_COMP="xz"
+fi
+
+TEMP_DIR="$WORKING_DIR/buat-livecd"
+DATE="$(date '+%F-%H-%M')"
+
+s_log "============================"
+s_log " Buat LiveCD IGOS Nusantara "
+s_log "============================"
+
+s_log ""
+s_log "Konfigurasi:"
+s_log "-> ISO_CONF           $ISO_CONF"
+s_log "-> HOSTNAME           $HOSTNAME"
+s_log "-> CONTAINER_SIZE     $CONTAINER_SIZE"
+s_log "-> CONTAINER_UUID     $CONTAINER_UUID"
+s_log "-> SQUASHFS_COMP      $SQUASHFS_COMP"
+s_log "-> INTERACTIVE_SHELL  $INTERACTIVE_SHELL"
+s_log "-> IGN_DIR            $IGN_DIR"
+s_log "-> WORKING_DIR        $WORKING_DIR"
+s_log "-> TEMP_DIR           $TEMP_DIR"
+s_log ""
+
+read -p "Tekan [Enter] untuk melanjutkan, Ctrl-C untuk membatalkan."
+echo ""
+
+mkdir -p $TEMP_DIR/LiveOS/
+
+s_log "Membuat filesystem..."
+s_log "-> Membuat container ($CONTAINER_SIZE GiB)..."
+SYSSIZE=$(echo "($CONTAINER_SIZE * 1024 * 1024 * 1024)" | bc)
+dd if=/dev/null of=$TEMP_DIR/LiveOS/rootfs.img seek=$SYSSIZE bs=1
+s_log "-> Memformat container..."
+mkfs.ext4 -L "_IGNX" -U "$CONTAINER_UUID" $TEMP_DIR/LiveOS/rootfs.img
+
+s_log "Menyalin sistem ke container..."
+s_log "-> Mengaitkan container..."
+s_mount_cont
+
+s_log "-> Menyalin sistem..."
+s_log "   (prosesnya cukup lama, tergantung ukuran sistem)"
+rsync -avPHpEAXogS --specials --quiet --exclude="dev/*" --exclude="proc/*" --exclude="sys/*" \
+	--exclude="run/*" --exclude="media/*" --exclude="mnt/*" \
+	--exclude="home/*" --exclude="root/*" --exclude="tmp/*" \
+	--exclude="var/backups/*" --exclude="var/cache/*" --exclude="var/run/*" --exclude="var/log/*" \
+	--exclude="var/mail/*" --exclude="var/spool/*" --exclude="var/tmp/*" \
+	$IGN_DIR/ $TEMP_DIR/container
+
+s_log "-> Menyalin konfigurasi default..."
+mkdir $TEMP_DIR/container/home/igos
+rsync -avPHpEAXogS --specials --quiet $TEMP_DIR/container/etc/skel/ $TEMP_DIR/container/home/igos/
+s_chroot_cont chown -hR igos:igos /home/igos/
+echo "UUID=$CONTAINER_UUID / ext4 defaults 0 0" > $TEMP_DIR/container/etc/fstab
+
+s_log "-> Mengatur ulang sandi pengguna root dan igos..."
+s_chroot_cont passwd -d root
+s_chroot_cont passwd -d igos
+
+s_log "-> Mengatur hostname..."
+echo "$HOSTNAME" > $TEMP_DIR/container/etc/hostname
+
+s_log "-> Mengatur hosts..."
+echo -e "127.0.0.1\tlocalhost\n127.0.0.1\t$HOSTNAME" > $TEMP_DIR/container/etc/hosts
+
+s_log "-> Bersih-bersih sistem..."
+s_log "   Membersihkan data YUM..."
+s_chroot_cont yum clean all
+s_log "   Membersihkan data DNF..."
+s_chroot_cont dnf clean all
+
+if [[ "$INTERACTIVE_SHELL" == "1" ]]; then
+	s_log "-> Masuk ke interactive shell..."
+	s_log "   ('exit' untuk keluar dari interactive shell)"
+	s_log "   Container ada di $TEMP_DIR/container"
+	s_log ""
+	mount -o bind /proc $TEMP_DIR/container/proc
+	mount -o bind /dev $TEMP_DIR/container/dev
+	mount -o bind /dev/pts $TEMP_DIR/container/dev/pts
+	mount -o bind /sys $TEMP_DIR/container/sys
+	s_chroot_cont
+	umount $TEMP_DIR/container/sys
+	umount $TEMP_DIR/container/dev/pts
+	umount $TEMP_DIR/container/dev
+	umount $TEMP_DIR/container/proc
+fi
+
+s_log "-> Melepas kait container..."
+s_umount_cont
+
+s_log "-> Memeriksa container..."
+fsck -y $TEMP_DIR/LiveOS/rootfs.img
+
+s_log ""
+s_log "Membuat ISO..."
+mkdir $TEMP_DIR/temp_iso
+
+s_log "-> Menyalin konfigurasi ISO..."
+rsync -avP --quiet --exclude="*/isohdpfx.bin" $ISO_CONF/ $TEMP_DIR/temp_iso/
+
+s_log "-> Menyalin kernel dan ramdisk..."
+KERNEL_VER=$(find $IGN_DIR/boot/vmlinuz-* | sort | tail -n1 | sed "s/\(.*\)vmlinuz-//")
+if [[ $KERNEL_VER == "" ]]; then
+	e_log "   Kernel tidak ditemukan, proses akan dibatalkan :("
+	rm -rf $TEMP_DIR
+	exit 1
+fi
+KERNEL_SIZE=$(du $IGN_DIR/boot/vmlinuz-$KERNEL_VER | sed -e "s/\t\(.*\)//")
+s_log "   Kernel ditemukan: Linux $KERNEL_VER, $KERNEL_SIZE KiB"
+s_log "   Membuat initial ramdisk..."
+s_chroot_root dracut -f -N --kver="$KERNEL_VER" --add="dmsquash-live" /initrd0.img-buat-livecd
+INITRD_SIZE=$(du $IGN_DIR/initrd0.img-buat-livecd | sed -e "s/\t\(.*\)//")
+s_log "   Initial ramdisk dibuat: $INITRD_SIZE KiB"
+s_log "   Menyalin kernel..."
+cp -f $IGN_DIR/boot/vmlinuz-$KERNEL_VER $TEMP_DIR/temp_iso/isolinux/vmlinuz0
+s_log "   Memindahkan initial ramdisk..."
+mv -f $IGN_DIR/initrd0.img-buat-livecd $TEMP_DIR/temp_iso/isolinux/initrd0.img
+
+s_log "-> Mengompres LiveOS..."
+s_log "   (mungkin lama, tergantung kemampuan CPU dan ukuran LiveOS)"
+pushd $TEMP_DIR/
+mksquashfs LiveOS $TEMP_DIR/temp_iso/LiveOS/squashfs.img -comp $SQUASHFS_COMP -keep-as-directory
+popd
+
+s_log "-> Membuat ISO..."
+pushd $TEMP_DIR/temp_iso/
+xorriso -as mkisofs -o $WORKING_DIR/IGNX-Remastered_$DATE.iso -V "IGNX" -input-charset utf8 -J -R -isohybrid-mbr $ISO_CONF/isolinux/isohdpfx.bin -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table .
+popd
+chmod 666 $WORKING_DIR/IGNX-Remastered_$DATE.iso
+sync
+
+s_log ""
+s_log "Bersih-bersih..."
+rm -rf $TEMP_DIR
+s_log "Selesai!"
