@@ -2,8 +2,6 @@
 
 VERSION="0.2"
 CREDIT="ubunteroz, IGN-dev"
-CONTAINER_UUID="16051605-1605-1605-1605-160516051605"
-HOSTNAME="ignbox"
 
 if [[ `whoami` != "root" ]]
 then
@@ -19,12 +17,70 @@ function e_log {
 	echo -e "\e[1m\e[31m$1\e[0m"
 }
 
+function s_check_conf {
+	ERR=0
+
+	# Container
+	if [[ "$CONTAINER_SIZE" -lt "3" ]]; then
+		e_log "Ukuran container terlalu kecil!"
+		ERR=1
+	fi
+
+	# IGN root directory
+	if [ ! -d "$IGN_DIR" ]; then
+		e_log "Direktori root IGN tidak ditemukan!"
+		ERR=1
+	fi
+
+	# Working directory
+	if [ ! -d "$WORKING_DIR" ]; then
+		e_log "Direktori output tidak ditemukan!"
+		ERR=1
+	fi
+
+	# Interactive shell
+	if [[ "$INTERACTIVE_SHELL" != "" && "$INTERACTIVE_SHELL" != "0" && "$INTERACTIVE_SHELL" != "1" ]]; then
+		e_log "Mode interactive shell tidak dikenali!"
+		ERR=1
+	fi
+
+	# SquashFS compression method
+	if [[ "$SQUASHFS_COMP" != "" && "$SQUASHFS_COMP" != "gzip" && "$SQUASHFS_COMP" != "xz" ]]; then
+		e_log "Metode kompresi SquashFS tidak dikenali!"
+		ERR=1
+	fi
+
+	# Generate MD5
+	if [[ "$GENERATE_MD5" != "" && "$GENERATE_MD5" != "0" && "$GENERATE_MD5" != "1" ]]; then
+		e_log "Opsi pembuatan MD5 sum tidak dikenali!"
+	fi
+
+	if [[ "$ERR" == "1" ]]; then
+		exit 1
+	fi
+}
+
+function s_check_isoconf {
+	ERR=0
+	FILES_TO_CHECK="isolinux/boot.cat isolinux/isolinux.bin isolinux/isolinux.cfg buat-livecd.ks"
+	for a in $FILES_TO_CHECK; do
+		if [ ! -f "$ISO_CONF/$a" ]; then
+			e_log "Berkas '$a' tidak ditemukan!"
+			ERR=1
+		fi
+	done
+
+	if [[ "$ERR" == "1" ]]; then
+		exit 1
+	fi
+}
+
 function s_chroot_root {
-	chroot $IGN_DIR $@
+	chroot $IGN_DIR "$@"
 }
 
 function s_chroot_cont {
-	chroot $TEMP_DIR/container $@
+	chroot $TEMP_DIR/container "$@"
 }
 
 function s_mount_cont {
@@ -46,8 +102,8 @@ function s_help {
 	echo "Opsi:"
 	echo "  -c, --config <direktori>   Direktori konfigurasi LiveCD"
 	echo "                             (default: /usr/share/buat-livecd/)"
-	echo "  -f, --fast                 Gunakan metode kompresi GZip (lebih cepat)"
-	echo "                             (default: XZ, lebih lama namun ukuran LiveCD lebih kecil)"
+	echo "  -f, --fast                 Gunakan mode cepat, berguna untuk testing"
+	echo "                             (kompresi GZip, tidak membuat MD5 sum, dll)"
 	echo "  -m, --modify               Masuk ke interactive shell untuk memodifikasi LiveOS"
 	echo "  -o, --output <direktori>   Direktori output"
 	echo "                             (default: $HOME)"
@@ -59,11 +115,19 @@ function s_help {
 	echo "  -v, --version              Tampilkan versi skrip ini"
 }
 
+# Check for dependencies
+DEPS="md5sum mkfs.ext4 mksquashfs rsync xorriso"
+for a in $DEPS; do
+	if [[ "$(which $a)" == "" ]]; then
+		e_log "$a tidak ditemukan!"
+		DEPS_ERR=1
+	fi
+done
+if [[ "$DEPS_ERR" == "1" ]]; then exit 1; fi
+
 CMDLINE=$(getopt -o c:fhmo:r:s:v --long config:,fast,help,modify,output:root:,size:,version -n "ign-buat-livecd" -- "$@")
 
 eval set -- "$CMDLINE"
-
-INTERACTIVE_SHELL="0"
 
 while true; do
 	case "$1" in
@@ -72,12 +136,12 @@ while true; do
 				ISO_CONF="$(readlink -f $2)"
 			else
 				e_log "Oops, direktori konfigurasi \'$2\' tidak ada :("
-				exit
+				exit 1
 			fi
 			shift 2
 			;;
 		-f | --fast )
-			SQUASHFS_COMP="gzip"
+			FAST_="1"
 			shift
 			;;
 		-h | --help )
@@ -85,29 +149,29 @@ while true; do
 			exit
 			;;
 		-m | --modify )
-			INTERACTIVE_SHELL="1"
+			INTERACTIVE_SHELL_="1"
 			shift
 			;;
 		-o | --output )
 			if [ -d "$2" ]; then
-				WORKING_DIR="$(readlink -f $2)"
+				WORKING_DIR_="$(readlink -f $2)"
 			else
-				e_log "Oops, direktori output \'$2\' tidak ada :("
-				exit
+				e_log "Direktori output \'$2\' tidak ditemukan!"
+				exit 1
 			fi
 			shift 2
 			;;
 		-r | --root )
 			if [ -d "$2" ]; then
-				IGN_DIR="$(readlink -f $2)"
+				IGN_DIR_="$(readlink -f $2)"
 			else
-				e_log "Oops, direktori IGN \'$2\' tidak ada :("
-				exit
+				e_log "Direktori root IGN \'$2\' tidak ditemukan!"
+				exit 1
 			fi
 			shift 2
 			;;
 		-s | --size )
-			CONTAINER_SIZE="$2"
+			CONTAINER_SIZE_="$2"
 			shift 2
 			;;
 		-v | --version )
@@ -130,7 +194,31 @@ if [[ "$ISO_CONF" == "" ]]; then
 	ISO_CONF="/usr/share/buat-livecd/"
 fi
 
-if [[ "$CONTAINER_SIZE" == "" || $CONTAINER_SIZE == "0" ]]; then
+if [ -f "$ISO_CONF/buat-livecd.cfg" ]; then
+	. $ISO_CONF/buat-livecd.cfg
+fi
+
+if [[ "$HOSTNAME" == "" ]]; then
+	HOSTNAME="nusantara"
+fi
+
+if [[ "$LIVE_USER" == "" ]]; then
+	LIVE_USER="liveuser"
+fi
+
+if [[ "$LIVE_USER_FULLNAME" == "" ]]; then
+	LIVE_USER="Live User"
+fi
+
+if [[ "$LOCAL_USER" == "" ]]; then
+	LIVE_USER="igos"
+fi
+
+if [[ "$LOCAL_USER_FULLNAME" == "" ]]; then
+	LIVE_USER="IGOS Nusantara"
+fi
+
+if [[ "$CONTAINER_SIZE" == "" ]]; then
 	CONTAINER_SIZE="3"
 fi
 
@@ -142,28 +230,64 @@ if [[ "$WORKING_DIR" == "" ]]; then
 	WORKING_DIR="$HOME"
 fi
 
+if [[ "$INTERACTIVE_SHELL" == "" ]]; then
+	INTERACTIVE_SHELL="0"
+fi
+
 if [[ "$SQUASHFS_COMP" == "" ]]; then
 	SQUASHFS_COMP="xz"
 fi
 
+if [[ "$GENERATE_MD5" == "" ]]; then
+	GENERATE_MD5="1"
+fi
+
+# Override buat-livecd.cfg values
+if [[ "$FAST_" = "1" ]]; then
+	SQUASHFS_COMP="gzip"
+	GENERATE_MD5="0"
+fi
+
+if [[ "$INTERACTIVE_SHELL_" = "1" ]]; then
+	INTERACTIVE_SHELL="1"
+fi
+
+if [[ "$WORKING_DIR_" != "" ]]; then
+	WORKING_DIR="$WORKING_DIR_"
+fi
+
+if [[ "$CONTAINER_SIZE_" != "" ]]; then
+	CONTAINER_SIZE="$CONTAINER_SIZE_"
+fi
+
+if [[ "$IGN_DIR_" != "" ]]; then
+	IGN_DIR="$IGN_DIR_"
+fi
+
+s_check_conf
+s_check_isoconf
+
 TEMP_DIR="$WORKING_DIR/buat-livecd"
 DATE="$(date '+%F-%H-%M')"
+CONTAINER_UUID="16051605-1605-1605-1605-160516051605"
 
 s_log "============================"
 s_log " Buat LiveCD IGOS Nusantara "
 s_log "============================"
 
 s_log ""
-s_log "Konfigurasi:"
-s_log "-> ISO_CONF           $ISO_CONF"
-s_log "-> HOSTNAME           $HOSTNAME"
-s_log "-> CONTAINER_SIZE     $CONTAINER_SIZE"
-s_log "-> CONTAINER_UUID     $CONTAINER_UUID"
-s_log "-> SQUASHFS_COMP      $SQUASHFS_COMP"
-s_log "-> INTERACTIVE_SHELL  $INTERACTIVE_SHELL"
-s_log "-> IGN_DIR            $IGN_DIR"
-s_log "-> WORKING_DIR        $WORKING_DIR"
-s_log "-> TEMP_DIR           $TEMP_DIR"
+s_log "-> Konfigurasi        $ISO_CONF"
+s_log "-> Hostname           $HOSTNAME"
+s_log "-> Pengguna live      $LIVE_USER ($LIVE_USER_FULLNAME)"
+s_log "-> Pengguna lokal     $LOCAL_USER ($LOCAL_USER_FULLNAME)"
+s_log "-> Pengguna dihapus   $USERS_TO_DEL"
+s_log "-> Ukuran container   $CONTAINER_SIZE"
+s_log "-> Kompresi           $SQUASHFS_COMP"
+s_log "-> Modus interaktif   $INTERACTIVE_SHELL"
+s_log "-> Buat MD5 sum       $GENERATE_MD5"
+s_log "-> Direktori IGN      $IGN_DIR"
+s_log "-> Direktori output   $WORKING_DIR"
+s_log "-> Dir. sementara     $TEMP_DIR"
 s_log ""
 
 read -p "Tekan [Enter] untuk melanjutkan, Ctrl-C untuk membatalkan."
@@ -191,20 +315,50 @@ rsync -avPHpEAXogS --specials --quiet --exclude="dev/*" --exclude="proc/*" --exc
 	--exclude="var/mail/*" --exclude="var/spool/*" --exclude="var/tmp/*" \
 	$IGN_DIR/ $TEMP_DIR/container
 
-s_log "-> Menyalin konfigurasi default..."
-mkdir $TEMP_DIR/container/home/igos
-rsync -avPHpEAXogS --specials --quiet $TEMP_DIR/container/etc/skel/ $TEMP_DIR/container/home/igos/
-s_chroot_cont chown -hR igos:igos /home/igos/
+if [[ "$USERS_TO_DEL" != "" ]]; then
+	s_log "-> Menghapus pengguna..."
+	for a in $USERS_TO_DEL; do
+		s_chroot_cont userdel -r $a
+	done
+fi
+
+s_log "-> Membuat pengguna live dan local..."
+s_chroot_cont useradd -c "$LIVE_USER_FULLNAME" -m -U $LIVE_USER
+if [ ! -d "$TEMP_DIR/container/etc/buat-livecd" ]; then
+	mkdir $TEMP_DIR/container/etc/buat-livecd
+fi
+cat $ISO_CONF/buat-livecd.ks | sed -e "s/___LIVEUSER___/$LIVE_USER/" \
+	-e "s/___LOCALUSER___/$LOCAL_USER/" \
+	-e "s/___LOCALUSERFULLNAME___/$LOCAL_USER_FULLNAME/" \
+	> $TEMP_DIR/container/etc/buat-livecd/buat-livecd.ks
+
+s_log "-> Mengatur konfigurasi default..."
 echo "UUID=$CONTAINER_UUID / ext4 defaults 0 0" > $TEMP_DIR/container/etc/fstab
-
-s_log "-> Mengatur ulang sandi pengguna root dan igos..."
+cat <<EOF > $TEMP_DIR/container/usr/share/applications/liveinst.desktop
+[Desktop Entry]
+Name=Install to Hard Drive
+Name[en@quot]=Install to Hard Drive
+Name[id]=Pasang ke Harddisk
+GenericName=Install
+GenericName[en@quot]=Install
+GenericName[en_GB]=Install
+GenericName[id]=Pasang
+Categories=System;Utility;X-Red-Hat-Base;X-Fedora;GNOME;GTK;
+Exec=/usr/bin/liveinst --kickstart /etc/buat-livecd/buat-livecd.ks
+Terminal=false
+Type=Application
+Icon=anaconda
+Encoding=UTF-8
+StartupNotify=false
+NoDisplay=true
+X-Desktop-File-Install-Version=0.19
+EOF
+s_log "   Mengatur ulang sandi pengguna..."
 s_chroot_cont passwd -d root
-s_chroot_cont passwd -d igos
-
-s_log "-> Mengatur hostname..."
+s_chroot_cont passwd -d $LIVE_USER
+s_log "   Mengatur hostname..."
 echo "$HOSTNAME" > $TEMP_DIR/container/etc/hostname
-
-s_log "-> Mengatur hosts..."
+s_log "   Mengatur hosts..."
 echo -e "127.0.0.1\tlocalhost\n127.0.0.1\t$HOSTNAME" > $TEMP_DIR/container/etc/hosts
 
 s_log "-> Bersih-bersih sistem..."
@@ -240,7 +394,8 @@ s_log "Membuat ISO..."
 mkdir $TEMP_DIR/temp_iso
 
 s_log "-> Menyalin konfigurasi ISO..."
-rsync -avP --quiet --exclude="*/isohdpfx.bin" $ISO_CONF/ $TEMP_DIR/temp_iso/
+rsync -avP --quiet --exclude="*/isohdpfx.bin" --exclude="buat-livecd.cfg" \
+	--exclude="buat-livecd.ks" $ISO_CONF/ $TEMP_DIR/temp_iso/
 
 s_log "-> Menyalin kernel dan ramdisk..."
 KERNEL_VER=$(find $IGN_DIR/boot/vmlinuz-* | sort | tail -n1 | sed "s/\(.*\)vmlinuz-//")
@@ -268,10 +423,24 @@ popd
 
 s_log "-> Membuat ISO..."
 pushd $TEMP_DIR/temp_iso/
-xorriso -as mkisofs -o $WORKING_DIR/IGNX-Remastered_$DATE.iso -V "IGNX" -input-charset utf8 -J -R -isohybrid-mbr $ISO_CONF/isolinux/isohdpfx.bin -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table .
+if [ -f "$ISO_CONF/isolinux/isohdpfx.bin" ]; then
+	s_log "   Hybrid ISO"
+	xorriso -as mkisofs -o $WORKING_DIR/IGNX-Remastered_$DATE.iso -V "IGNX" -input-charset utf8 -J -R -isohybrid-mbr $ISO_CONF/isolinux/isohdpfx.bin -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table .
+else
+	s_log "   Non-hybrid ISO"
+	xorriso -as mkisofs -o $WORKING_DIR/IGNX-Remastered_$DATE.iso -V "IGNX" -input-charset utf8 -J -R -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table .
+fi
 popd
 chmod 666 $WORKING_DIR/IGNX-Remastered_$DATE.iso
 sync
+
+if [[ "$GENERATE_MD5" == "1" ]]; then
+	s_log "-> Membuat MD5 sum..."
+	pushd $WORKING_DIR
+	md5sum IGNX-Remastered_$DATE.iso > IGNX-Remastered_$DATE.iso.md5
+	chmod 666 IGNX-Remastered_$DATE.iso.md5
+	popd
+fi
 
 s_log ""
 s_log "Bersih-bersih..."
