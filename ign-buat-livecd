@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="0.2"
+VERSION="0.3"
 CREDIT="ubunteroz, IGN-dev"
 
 if [[ `whoami` != "root" ]]
@@ -295,6 +295,7 @@ echo ""
 
 mkdir -p $TEMP_DIR/LiveOS/
 
+# Create sparse file and format it
 s_log "Membuat filesystem..."
 s_log "-> Membuat container ($CONTAINER_SIZE GiB)..."
 SYSSIZE=$(echo "($CONTAINER_SIZE * 1024 * 1024 * 1024)" | bc)
@@ -306,15 +307,29 @@ s_log "Menyalin sistem ke container..."
 s_log "-> Mengaitkan container..."
 s_mount_cont
 
+# Copy system files
 s_log "-> Menyalin sistem..."
 s_log "   (prosesnya cukup lama, tergantung ukuran sistem)"
-rsync -avPHpEAXogS --specials --quiet --exclude="dev/*" --exclude="proc/*" --exclude="sys/*" \
-	--exclude="run/*" --exclude="media/*" --exclude="mnt/*" \
-	--exclude="home/*" --exclude="root/*" --exclude="tmp/*" \
-	--exclude="var/backups/*" --exclude="var/cache/*" --exclude="var/run/*" --exclude="var/log/*" \
-	--exclude="var/mail/*" --exclude="var/spool/*" --exclude="var/tmp/*" \
+rsync -avPHpEAXogS --specials --quiet \
+	--exclude="dev/*" \
+	--exclude="proc/*" \
+	--exclude="sys/*" \
+	--exclude="run/*" \
+	--exclude="media/*" \
+	--exclude="mnt/*" \
+	--exclude="home/*" \
+	--exclude="root/*" \
+	--exclude="tmp/*" \
+	--exclude="var/backups/*" \
+	--exclude="var/cache/*" \
+	--exclude="var/run/*" \
+	--exclude="var/log/*" \
+	--exclude="var/mail/*" \
+	--exclude="var/spool/*" \
+	--exclude="var/tmp/*" \
 	$IGN_DIR/ $TEMP_DIR/container
 
+# Delete users
 if [[ "$USERS_TO_DEL" != "" ]]; then
 	s_log "-> Menghapus pengguna..."
 	for a in $USERS_TO_DEL; do
@@ -322,6 +337,7 @@ if [[ "$USERS_TO_DEL" != "" ]]; then
 	done
 fi
 
+# Create default users
 s_log "-> Membuat pengguna live dan local..."
 s_chroot_cont useradd -c "$LIVE_USER_FULLNAME" -m -U $LIVE_USER
 if [ ! -d "$TEMP_DIR/container/etc/buat-livecd" ]; then
@@ -332,8 +348,13 @@ cat $ISO_CONF/buat-livecd.ks | sed -e "s/___LIVEUSER___/$LIVE_USER/" \
 	-e "s/___LOCALUSERFULLNAME___/$LOCAL_USER_FULLNAME/" \
 	> $TEMP_DIR/container/etc/buat-livecd/buat-livecd.ks
 
+# Set default configuration
 s_log "-> Mengatur konfigurasi default..."
+
+## Set /etc/fstab
 echo "UUID=$CONTAINER_UUID / ext4 defaults 0 0" > $TEMP_DIR/container/etc/fstab
+
+## Create desktop shortcut
 cat <<EOF > $TEMP_DIR/container/usr/share/applications/liveinst.desktop
 [Desktop Entry]
 Name=Install to Hard Drive
@@ -353,20 +374,35 @@ StartupNotify=false
 NoDisplay=true
 X-Desktop-File-Install-Version=0.19
 EOF
+
+## Reset password
 s_log "   Mengatur ulang sandi pengguna..."
 s_chroot_cont passwd -d root
 s_chroot_cont passwd -d $LIVE_USER
+
+## Set hostname
 s_log "   Mengatur hostname..."
 echo "$HOSTNAME" > $TEMP_DIR/container/etc/hostname
+
+## Set /etc/hosts
 s_log "   Mengatur hosts..."
-echo -e "127.0.0.1\tlocalhost\n127.0.0.1\t$HOSTNAME" > $TEMP_DIR/container/etc/hosts
+echo -e "127.0.0.1\tlocalhost" > $TEMP_DIR/container/etc/hosts
+echo -e "127.0.0.1\t$HOSTNAME" >> $TEMP_DIR/container/etc/hosts
 
+# Clean things up
 s_log "-> Bersih-bersih sistem..."
-s_log "   Membersihkan data YUM..."
-s_chroot_cont yum clean all
-s_log "   Membersihkan data DNF..."
-s_chroot_cont dnf clean all
+## YUM's cache
+if [[ $(which yum) != "" ]]; then
+	s_log "   Membersihkan data YUM..."
+	s_chroot_cont yum clean all
+fi
+## DNF's cache
+if [[ $(which dnf) != "" ]]; then
+	s_log "   Membersihkan data DNF..."
+	s_chroot_cont dnf clean all
+fi
 
+# Interactive shell
 if [[ "$INTERACTIVE_SHELL" == "1" ]]; then
 	s_log "-> Masuk ke interactive shell..."
 	s_log "   ('exit' untuk keluar dari interactive shell)"
@@ -383,21 +419,31 @@ if [[ "$INTERACTIVE_SHELL" == "1" ]]; then
 	umount $TEMP_DIR/container/proc
 fi
 
+# Unmount rootfs.img
 s_log "-> Melepas kait container..."
 s_umount_cont
 
+# Do filesystem check
 s_log "-> Memeriksa container..."
 fsck -y $TEMP_DIR/LiveOS/rootfs.img
 
+# Create ISO
 s_log ""
 s_log "Membuat ISO..."
 mkdir $TEMP_DIR/temp_iso
 
+## Copy templates
 s_log "-> Menyalin konfigurasi ISO..."
-rsync -avP --quiet --exclude="*/isohdpfx.bin" --exclude="buat-livecd.cfg" \
-	--exclude="buat-livecd.ks" $ISO_CONF/ $TEMP_DIR/temp_iso/
+rsync -avP --quiet \
+	--exclude="*/isohdpfx.bin" \
+	--exclude="buat-livecd.cfg" \
+	--exclude="buat-livecd.ks" \
+	$ISO_CONF/ $TEMP_DIR/temp_iso/
 
+## Kernel and ramdisk
 s_log "-> Menyalin kernel dan ramdisk..."
+
+### Find latest kernel
 KERNEL_VER=$(find $IGN_DIR/boot/vmlinuz-* | sort | tail -n1 | sed "s/\(.*\)vmlinuz-//")
 if [[ $KERNEL_VER == "" ]]; then
 	e_log "   Kernel tidak ditemukan, proses akan dibatalkan :("
@@ -406,21 +452,27 @@ if [[ $KERNEL_VER == "" ]]; then
 fi
 KERNEL_SIZE=$(du $IGN_DIR/boot/vmlinuz-$KERNEL_VER | sed -e "s/\t\(.*\)//")
 s_log "   Kernel ditemukan: Linux $KERNEL_VER, $KERNEL_SIZE KiB"
+
+### Create ramdisk
 s_log "   Membuat initial ramdisk..."
 s_chroot_root dracut -f -N --kver="$KERNEL_VER" --add="dmsquash-live" /initrd0.img-buat-livecd
 INITRD_SIZE=$(du $IGN_DIR/initrd0.img-buat-livecd | sed -e "s/\t\(.*\)//")
 s_log "   Initial ramdisk dibuat: $INITRD_SIZE KiB"
+
+### Copy kernel and ramdisk
 s_log "   Menyalin kernel..."
 cp -f $IGN_DIR/boot/vmlinuz-$KERNEL_VER $TEMP_DIR/temp_iso/isolinux/vmlinuz0
 s_log "   Memindahkan initial ramdisk..."
 mv -f $IGN_DIR/initrd0.img-buat-livecd $TEMP_DIR/temp_iso/isolinux/initrd0.img
 
+## Compress rootfs.img using SquasfFS
 s_log "-> Mengompres LiveOS..."
 s_log "   (mungkin lama, tergantung kemampuan CPU dan ukuran LiveOS)"
 pushd $TEMP_DIR/
 mksquashfs LiveOS $TEMP_DIR/temp_iso/LiveOS/squashfs.img -comp $SQUASHFS_COMP -keep-as-directory
 popd
 
+## Create ISO using xorriso
 s_log "-> Membuat ISO..."
 pushd $TEMP_DIR/temp_iso/
 if [ -f "$ISO_CONF/isolinux/isohdpfx.bin" ]; then
@@ -434,6 +486,7 @@ popd
 chmod 666 $WORKING_DIR/IGNX-Remastered_$DATE.iso
 sync
 
+# Generate MD5 checksum
 if [[ "$GENERATE_MD5" == "1" ]]; then
 	s_log "-> Membuat MD5 sum..."
 	pushd $WORKING_DIR

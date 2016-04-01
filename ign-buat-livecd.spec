@@ -1,6 +1,6 @@
 %define name ign-buat-livecd
 %define release ign10
-%define version 0.2
+%define version 0.3
 %define license MIT
 %define url http://igos-nusantara.or.id
 %define group System Environment/Base
@@ -43,6 +43,10 @@ rm -rf $RPM_BUILD_ROOT
 /usr/share/buat-livecd/*
 
 %changelog
+* Fri Apr 1 2016 Surya Handika Putratama <ubunteroz@gmail.com>
+- Add comments to source code
+- Don't show error if neither YUM nor DNF is exist
+
 * Mon Jan 19 2015 Surya Handika Putratama <ubunteroz@gmail.com>
 - Add --fast mode (use GZIP compression for mksquashfs)
 - Add interactive shell (--modify)
