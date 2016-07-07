@@ -270,8 +270,8 @@ if [[ "$ISO_CONF" == "" ]]; then
 	ISO_CONF="/usr/share/buat-livecd/"
 fi
 
-if [ -f "$ISO_CONF/buat-livecd.cfg" ]; then
-	. "$ISO_CONF/buat-livecd.cfg"
+if [ -f "$ISO_CONF/config.cfg" ]; then
+	. "$ISO_CONF/config.cfg"
 fi
 
 if [[ "$HOSTNAME" == "" ]]; then
@@ -318,7 +318,7 @@ if [[ "$GENERATE_MD5" == "" ]]; then
 	GENERATE_MD5="1"
 fi
 
-# Override buat-livecd.cfg values
+# Override config.cfg values
 if [[ "$FAST_" = "1" ]]; then
 	SQUASHFS_COMP="gzip"
 	GENERATE_MD5="0"
