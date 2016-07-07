@@ -25,12 +25,13 @@ function e_log {
 }
 
 function s_mount_iso {
+	sync
 	if [ -d "$TEMP_LOS_MOUNTPOINT" ]; then
-		umount "$TEMP_LOS_MOUNTPOINT"
+		umount -l "$TEMP_LOS_MOUNTPOINT"
 		rm -rf "$TEMP_LOS_MOUNTPOINT"
 	fi
 	if [ -d "$TEMP_RFS_MOUNTPOINT" ]; then
-		umount "$TEMP_RFS_MOUNTPOINT"
+		umount -l "$TEMP_RFS_MOUNTPOINT"
 		rm -rf "$TEMP_RFS_MOUNTPOINT"
 	fi
 	if [ -d "$TEMP_ISO_MOUNTPOINT" ]; then
@@ -57,15 +58,17 @@ function s_mount_iso {
 		mount -o ro "$TEMP_LOS_MOUNTPOINT/LiveOS/$ROOTFS_NAME" "$TEMP_RFS_MOUNTPOINT"
 	else
 		e_log "-> Rootfs tidak ditemukan!"
-		umount "$TEMP_LOS_MOUNTPOINT"
+		sync
+		umount -l "$TEMP_LOS_MOUNTPOINT"
 		fusermount -u "$TEMP_ISO_MOUNTPOINT"
 		rm -rf "$BASE_TEMP_MOUNTPOINT"
 	fi
 }
 
 function s_umount_iso {
-	umount "$TEMP_RFS_MOUNTPOINT"
-	umount "$TEMP_LOS_MOUNTPOINT"
+	sync
+	umount -l "$TEMP_RFS_MOUNTPOINT"
+	umount -l "$TEMP_LOS_MOUNTPOINT"
 	fusermount -u "$TEMP_ISO_MOUNTPOINT"
 	rm -rf "$BASE_TEMP_MOUNTPOINT"
 }
@@ -130,19 +133,11 @@ function s_check_isoconf {
 }
 
 function s_chroot_root {
-	chroot "$IGN_DIR" "$@"
+	systemd-nspawn -q -D "$IGN_DIR" "$@"
 }
 
 function s_chroot_cont {
-	mount -o bind /dev "$TEMP_DIR/container/dev"
-	mount -o bind /dev/pts "$TEMP_DIR/container/dev/pts"
-	mount -o bind /sys "$TEMP_DIR/container/sys"
-	mount -o bind /proc "$TEMP_DIR/container/proc"
-	chroot "$TEMP_DIR/container" "$@"
-	umount "$TEMP_DIR/container/dev/pts"
-	umount "$TEMP_DIR/container/dev"
-	umount "$TEMP_DIR/container/proc"
-	umount "$TEMP_DIR/container/sys"
+	systemd-nspawn -q -D "$TEMP_DIR/container" "$@"
 }
 
 function s_mount_cont {
@@ -154,7 +149,7 @@ function s_mount_cont {
 
 function s_umount_cont {
 	sync
-	umount "$TEMP_DIR/container"
+	umount -l "$TEMP_DIR/container"
 }
 
 function s_help {
@@ -254,7 +249,7 @@ while true; do
 done
 
 # Check for dependencies
-DEPS="md5sum mkfs.ext4 mksquashfs rsync xorriso"
+DEPS="md5sum mkfs.ext4 mksquashfs rsync systemd-nspawn xorriso"
 if [[ "$SOURCE_ISO" != "" ]]; then
 	DEPS="$DEPS fuseiso fusermount"
 fi
@@ -533,15 +528,15 @@ s_log "   Kernel ditemukan: Linux $KERNEL_VER, $KERNEL_SIZE KiB"
 ### Create ramdisk
 s_log "   Membuat initial ramdisk..."
 s_mount_cont
-s_chroot_cont dracut -f -N --kver="$KERNEL_VER" --add="dmsquash-live" /tmp/initrd0.img-buat-livecd > /dev/null
-INITRD_SIZE=$(du "$TEMP_DIR/container/tmp/initrd0.img-buat-livecd" | sed -e "s/\t\(.*\)//")
+s_chroot_cont dracut -f -N --kver="$KERNEL_VER" --add="dmsquash-live" /initrd0.img-buat-livecd > /dev/null
+INITRD_SIZE=$(du "$TEMP_DIR/container/initrd0.img-buat-livecd" | sed -e "s/\t\(.*\)//")
 s_log "   Initial ramdisk dibuat: $INITRD_SIZE KiB"
 
 ### Copy kernel and ramdisk
 s_log "   Menyalin kernel..."
 cp -f "$IGN_DIR/boot/vmlinuz-$KERNEL_VER" "$TEMP_DIR/temp_iso/isolinux/vmlinuz0"
 s_log "   Memindahkan initial ramdisk..."
-mv -f "$TEMP_DIR/container/tmp/initrd0.img-buat-livecd" "$TEMP_DIR/temp_iso/isolinux/initrd0.img"
+mv -f "$TEMP_DIR/container/initrd0.img-buat-livecd" "$TEMP_DIR/temp_iso/isolinux/initrd0.img"
 s_umount_cont
 
 ## Compress rootfs.img using SquasfFS
