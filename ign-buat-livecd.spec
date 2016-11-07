@@ -1,25 +1,24 @@
 %define name ign-buat-livecd
-%define release ign10
-%define version 0.3
+%define version 0.5
 %define license MIT
 %define url http://igos-nusantara.or.id
 %define group System Environment/Base
 %define _binaries_in_noarch_packages_terminate_build 0
 
-Summary:Buat LiveCD IGOS Nusantara
-Name:%{name}
-Version:%{version}
-Release:%{release}
-License:%{license}
-Group:%{group}
-URL:%{url}
-BuildRoot:%{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
-Source:%{name}_%{version}.tar.gz
-Requires:rsync
-Requires:xorriso
-Requires:squashfs-tools
-Requires:anaconda
-BuildArch:noarch
+Summary: Buat LiveCD IGOS Nusantara
+Name: %{name}
+Version: %{version}
+Release: 1%{?dist}
+License: %{license}
+Group: %{group}
+URL: %{url}
+BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
+Source: %{name}_%{version}.tar.gz
+Requires: rsync
+Requires: xorriso
+Requires: squashfs-tools
+Requires: anaconda
+BuildArch: noarch
 %description
 Buat LiveCD IGOS Nusantara
 
