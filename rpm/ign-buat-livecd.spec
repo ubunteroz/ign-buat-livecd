@@ -7,7 +7,7 @@ Release: 1%{?dist}
 License: MIT
 Group: System Environment/Base
 URL: http://igos-nusantara.or.id
-Source: https://github.com/ubunteroz/ignsdk-debian/archive/%{version}/ign-buat-livecd-%{version}.tar.gz
+Source0: https://github.com/ubunteroz/ignsdk-debian/archive/%{version}/ign-buat-livecd-%{version}.tar.gz
 Requires: rsync
 Requires: xorriso
 Requires: squashfs-tools
