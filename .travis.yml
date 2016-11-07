@@ -1,0 +1,25 @@
+language: cpp
+dist: trusty
+sudo: required
+
+services:
+    - docker
+
+env:
+  matrix:
+    - OS=fedora DIST=23
+    - OS=fedora DIST=24
+    - OS=fedora DIST=rawhide
+    - OS=el DIST=7
+
+script:
+    - git describe --always --long
+    - git clone https://github.com/packpack/packpack.git packpack
+    - packpack/packpack
+
+branches:
+  only:
+    - master
+
+notifications:
+  email: false
